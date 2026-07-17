@@ -1,0 +1,1257 @@
+{
+  "name": "Teams Transcricoes para OneDrive Reunioes",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "01b51e4e-66d0-452a-9f71-1a3f612ac82c",
+      "name": "Manual Trigger - Teste Reunioes Teams",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -4336,
+        -320
+      ],
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const diasBusca = 30;\nconst filtroAssuntoObrigatorio = '';\nconst now = new Date();\nconst end = new Date(now);\nconst start = new Date(now);\nstart.setDate(start.getDate() - diasBusca);\nfunction toIsoNoMs(date) {\n  return date.toISOString().replace(/\\.\\d{3}Z$/, 'Z');\n}\nconst startDateTime = toIsoNoMs(start);\nconst endDateTime = toIsoNoMs(end);\nreturn [{ json: {\n  teste_tipo: 'teams_calendario_transcricao_para_onedrive',\n  dias_busca: diasBusca,\n  filtro_assunto_obrigatorio: filtroAssuntoObrigatorio,\n  startDateTime,\n  endDateTime,\n  graph_me_url: 'https://graph.microsoft.com/v1.0/me'\n}}];"
+      },
+      "id": "2e47f171-4604-4667-8796-3229d864f64e",
+      "name": "Configurar Busca Calendario",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -4272,
+        288
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{$json.graph_me_url}}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftGraphSecurityOAuth2Api",
+        "options": {}
+      },
+      "id": "bce92da5-64c6-4ddd-8f6e-7f3a0957a733",
+      "name": "Graph - Quem Sou Eu",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -4288,
+        512
+      ],
+      "credentials": {
+        "microsoftGraphSecurityOAuth2Api": {
+          "id": "Br2RyUhQxAiGqJim",
+          "name": "Microsoft Graph Security n8n"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const config = $('Configurar Busca Calendario').first().json;\nconst me = $json;\n\nconst select = [\n  'id',\n  'subject',\n  'bodyPreview',\n  'start',\n  'end',\n  'isOnlineMeeting',\n  'onlineMeeting',\n  'onlineMeetingProvider',\n  'organizer',\n  'attendees',\n  'webLink',\n  'categories',\n  'isCancelled'\n].join(',');\n\nconst filter =\n  `start/dateTime ge '${config.startDateTime}' and end/dateTime le '${config.endDateTime}'`;\n\nfunction encodeQuery(params) {\n  return Object.entries(params)\n    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)\n    .join('&');\n}\n\nconst query = encodeQuery({\n  '$select': select,\n  '$filter': filter,\n  '$orderby': 'start/dateTime desc',\n  '$top': '50'\n});\n\nconst graphListarEventosUrl =\n  `https://graph.microsoft.com/v1.0/me/events?${query}`;\n\nreturn [\n  {\n    json: {\n      ...config,\n\n      usuario_graph_display_name: me.displayName || '',\n      usuario_graph_mail: me.mail || '',\n      usuario_graph_upn: me.userPrincipalName || '',\n      usuario_graph_id: me.id || '',\n\n      graph_listar_eventos_url: graphListarEventosUrl,\n\n      debug_select: select,\n      debug_filter: filter\n    }\n  }\n];"
+      },
+      "id": "f904fc6f-4b50-4baa-bc06-b4737d8b4169",
+      "name": "Preparar Listagem Calendario",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3968,
+        64
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{$json.graph_listar_eventos_url}}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftGraphSecurityOAuth2Api",
+        "options": {}
+      },
+      "id": "f54eaafc-cab4-426a-8a9b-42b7bc9bb3c4",
+      "name": "Graph - Listar Eventos Calendario",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -3968,
+        288
+      ],
+      "credentials": {
+        "microsoftGraphSecurityOAuth2Api": {
+          "id": "Br2RyUhQxAiGqJim",
+          "name": "Microsoft Graph Security n8n"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const base = $('Preparar Listagem Calendario').first().json;\nconst response = $json;\nconst eventos = response.value || [];\nfunction sanitizeName(value) {\n  return String(value || '').normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').replace(/[\\\\/:*?\"<>|#%&{}$!@+=`~]/g, ' ').replace(/\\s+/g, ' ').trim().slice(0, 120);\n}\nfunction getJoinUrl(evento) {\n  return evento.onlineMeeting?.joinUrl || evento.onlineMeeting?.joinWebUrl || evento.joinWebUrl || '';\n}\nconst filtro = String(base.filtro_assunto_obrigatorio || '').trim().toLowerCase();\nconst agora = new Date();\nconst candidatos = eventos\n  .filter(e => !e.isCancelled)\n  .filter(e => {\n    const fim = new Date(e.end?.dateTime || e.end || 0);\n    return fim < agora;\n  })\n  .filter(e => {\n    const provider = String(e.onlineMeetingProvider || '').toLowerCase();\n    const joinUrl = getJoinUrl(e);\n    return Boolean(e.isOnlineMeeting || joinUrl) && (provider.includes('teams') || String(joinUrl).includes('teams.microsoft.com'));\n  })\n  .filter(e => !filtro || String(e.subject || '').toLowerCase().includes(filtro));\nif (!candidatos.length) {\n  return [{ json: { ...base, status_busca_reunioes: 'nenhuma_reuniao_teams_finalizada_encontrada', total_eventos_calendario: eventos.length, total_reunioes_teams_candidatas: 0, observacao: 'Nenhuma reunião Teams finalizada foi encontrada no período/filtro informado.' }}];\n}\nreturn candidatos.map((evento, index) => {\n  const joinUrl = getJoinUrl(evento);\n  const data = String(evento.start?.dateTime || '').slice(0, 10) || new Date().toISOString().slice(0, 10);\n  const hora = String(evento.start?.dateTime || '').slice(11, 16);\n  const titulo = sanitizeName(evento.subject || 'Reuniao sem titulo');\n  return { json: {\n    ...base,\n    status_busca_reunioes: 'reuniao_teams_candidata_identificada',\n    total_eventos_calendario: eventos.length,\n    total_reunioes_teams_candidatas: candidatos.length,\n    indice_reuniao_candidata: index + 1,\n    calendar_event_id: evento.id,\n    calendar_event_web_link: evento.webLink || '',\n    calendar_event_subject: evento.subject || '',\n    calendar_event_body_preview: evento.bodyPreview || '',\n    calendar_event_start: evento.start || {},\n    calendar_event_end: evento.end || {},\n    calendar_event_categories: evento.categories || [],\n    meeting_title: titulo,\n    meeting_date: data,\n    meeting_time: hora,\n    organizer_name: evento.organizer?.emailAddress?.name || '',\n    organizer_email: evento.organizer?.emailAddress?.address || '',\n    attendees: (evento.attendees || []).map(a => ({ name: a.emailAddress?.name || '', email: a.emailAddress?.address || '', type: a.type || '', status: a.status?.response || '' })),\n    online_meeting_provider: evento.onlineMeetingProvider || '',\n    join_web_url: joinUrl,\n    projeto: titulo,\n    area: '[[Reuniões]]',\n    tags: 'reuniao, teams, transcricao'\n  }};\n});"
+      },
+      "id": "3eeb40f7-53a6-4a11-88fe-1d3d13dc478a",
+      "name": "Filtrar Reunioes Teams Finalizadas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3984,
+        496
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "fbf16d83-6f6c-4740-bfaf-e29b16a220b4",
+              "leftValue": "={{$json.status_busca_reunioes}}",
+              "rightValue": "reuniao_teams_candidata_identificada",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "7a62f44b-523f-44d9-9131-33be93a913ed",
+      "name": "IF - Achou Reuniao Teams",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -3696,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "{\n  \"status_execucao\": \"sem_reunioes_para_processar\",\n  \"mensagem\": \"Nenhuma reunião Teams finalizada foi encontrada para processar.\",\n  \"finalizado_sem_erro\": true\n}",
+        "options": {}
+      },
+      "id": "0f2c2008-74b7-489d-adb6-c879a2979fa5",
+      "name": "Sem Reunioes Para Processar",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -3440,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nfunction escapeODataString(value) {\n  return String(value || '').replace(/'/g, \"''\");\n}\n\nfunction encodeQuery(params) {\n  return Object.entries(params)\n    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)\n    .join('&');\n}\n\nreturn items.map(item => {\n  const json = item.json || {};\n\n  if (!json.join_web_url) {\n    return {\n      json: {\n        ...json,\n        status_online_meeting: 'sem_join_web_url',\n        observacao: 'Evento não possui joinWebUrl. Não é possível buscar onlineMeeting.'\n      }\n    };\n  }\n\n  const joinWebUrl = json.join_web_url;\n\n  const filter = `JoinWebUrl eq '${escapeODataString(joinWebUrl)}'`;\n\n  const query = encodeQuery({\n    '$filter': filter\n  });\n\n  const graph_buscar_online_meeting_url =\n    `https://graph.microsoft.com/v1.0/me/onlineMeetings?${query}`;\n\n  return {\n    json: {\n      ...json,\n\n      status_online_meeting: 'preparado_para_buscar_online_meeting',\n\n      graph_buscar_online_meeting_url,\n      debug_online_meeting_filter: filter\n    }\n  };\n});"
+      },
+      "id": "467a3bbd-90c5-47d8-bbb3-fbe58a3aaa50",
+      "name": "Preparar Busca Online Meeting",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3440,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{$json.graph_buscar_online_meeting_url}}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftGraphSecurityOAuth2Api",
+        "options": {}
+      },
+      "id": "1a8d3890-12c1-4d56-b0cb-fd867e6b53fe",
+      "name": "Graph - Buscar Online Meeting",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -3424,
+        240
+      ],
+      "credentials": {
+        "microsoftGraphSecurityOAuth2Api": {
+          "id": "Br2RyUhQxAiGqJim",
+          "name": "Microsoft Graph Security n8n"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const bases = $('Preparar Busca Online Meeting').all();\nconst inputs = $input.all();\nreturn inputs.map((item, index) => {\n  const base = bases[index]?.json || {};\n  const response = item.json || {};\n  const meetings = response.value || [];\n  if (!meetings.length) {\n    return { json: { ...base, online_meeting_encontrada: false, status_online_meeting: 'online_meeting_nao_encontrada', online_meeting_response: response, observacao: 'Não foi possível localizar onlineMeeting pelo joinWebUrl.' }};\n  }\n  const onlineMeeting = meetings[0];\n  return { json: {\n    ...base,\n    online_meeting_encontrada: true,\n    status_online_meeting: 'online_meeting_encontrada',\n    online_meeting_id: onlineMeeting.id || '',\n    online_meeting_subject: onlineMeeting.subject || base.meeting_title || '',\n    online_meeting_join_web_url: onlineMeeting.joinWebUrl || base.join_web_url || '',\n    online_meeting_start: onlineMeeting.startDateTime || '',\n    online_meeting_end: onlineMeeting.endDateTime || '',\n    online_meeting_original: onlineMeeting,\n    graph_listar_transcricoes_url: `https://graph.microsoft.com/v1.0/me/onlineMeetings/${encodeURIComponent(onlineMeeting.id)}/transcripts`\n  }};\n});"
+      },
+      "id": "4500efd9-573d-4a5a-a2d7-f75ab98409fe",
+      "name": "Extrair Online Meeting",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3232,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "2b6fae48-7a92-4bff-80ee-31f08004c4bb",
+              "leftValue": "={{$json.online_meeting_encontrada}}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "85dd1b24-181c-4a71-b0d0-1d5e3b600f19",
+      "name": "IF - Achou Online Meeting",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -3232,
+        448
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{$json.graph_listar_transcricoes_url}}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftGraphSecurityOAuth2Api",
+        "options": {}
+      },
+      "id": "9ca7f3ce-5504-407e-a092-0b9dc8513395",
+      "name": "Graph - Listar Transcricoes da Reuniao",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2976,
+        16
+      ],
+      "credentials": {
+        "microsoftGraphSecurityOAuth2Api": {
+          "id": "Br2RyUhQxAiGqJim",
+          "name": "Microsoft Graph Security n8n"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const bases = $('Extrair Online Meeting')\n  .all()\n  .filter(item => item.json.online_meeting_encontrada);\n\nconst inputs = $input.all();\n\nconst controleProcessadosPath = 'Reuniões/_controle/processados.txt';\nconst graphBaixarControleProcessadosUrl =\n  'https://graph.microsoft.com/v1.0/me/drive/root:/Reuni%C3%B5es/_controle/processados.txt:/content';\n\nfunction montarChaveProcessamento(base, transcript) {\n  return [\n    base.calendar_event_id || '',\n    base.online_meeting_id || '',\n    transcript?.id || ''\n  ].join('__');\n}\n\nfunction escolherTranscricao(transcripts) {\n  if (!Array.isArray(transcripts) || !transcripts.length) {\n    return null;\n  }\n\n  // Preferir transcrição com endDateTime preenchido.\n  // Se houver mais de uma, pega a mais recente.\n  const ordenadas = [...transcripts].sort((a, b) => {\n    const dataA = new Date(a.endDateTime || a.createdDateTime || 0).getTime();\n    const dataB = new Date(b.endDateTime || b.createdDateTime || 0).getTime();\n    return dataB - dataA;\n  });\n\n  return ordenadas[0];\n}\n\nreturn inputs.map((item, index) => {\n  const base = bases[index]?.json || {};\n  const response = item.json || {};\n  const transcripts = response.value || [];\n\n  if (!transcripts.length) {\n    return {\n      json: {\n        ...base,\n\n        transcricao_encontrada: false,\n        status_transcricao: 'nenhuma_transcricao_encontrada',\n        total_transcricoes: 0,\n        transcripts_response: response,\n\n        chave_processamento: '',\n        controle_processados_path: controleProcessadosPath,\n        graph_baixar_controle_processados_url: graphBaixarControleProcessadosUrl,\n\n        observacao:\n          'A reunião foi encontrada, mas nenhuma transcrição foi localizada via Graph.'\n      }\n    };\n  }\n\n  const transcript = escolherTranscricao(transcripts);\n\n  const transcriptContentUrl =\n    transcript.transcriptContentUrl ||\n    transcript.contentUrl ||\n    `https://graph.microsoft.com/v1.0/me/onlineMeetings/${encodeURIComponent(base.online_meeting_id)}/transcripts/${encodeURIComponent(transcript.id)}/content?$format=text/vtt`;\n\n  const chaveProcessamento = montarChaveProcessamento(base, transcript);\n\n  return {\n    json: {\n      ...base,\n\n      transcricao_encontrada: true,\n      status_transcricao: 'transcricao_encontrada',\n      total_transcricoes: transcripts.length,\n\n      transcript_id: transcript.id || '',\n      transcript_created_date_time: transcript.createdDateTime || '',\n      transcript_end_date_time: transcript.endDateTime || '',\n      transcript_original: transcript,\n      transcript_content_url: transcriptContentUrl,\n\n      chave_processamento: chaveProcessamento,\n\n      controle_processados_path: controleProcessadosPath,\n      graph_baixar_controle_processados_url: graphBaixarControleProcessadosUrl\n    }\n  };\n});"
+      },
+      "id": "3d820fc3-c4be-4e65-93e9-e268309cfb4b",
+      "name": "Preparar Download Transcricao",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2976,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "017a2b87-994a-476d-8cb4-5001bb334704",
+              "leftValue": "={{$json.transcricao_encontrada}}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "e7ba60f9-e5c8-49a6-9bdd-4365791b998d",
+      "name": "IF - Achou Transcricao",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -2960,
+        464
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{$json.transcript_content_url}}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftGraphSecurityOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "text/vtt"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "id": "86c79096-00b5-4823-9162-5c13a13d1876",
+      "name": "Graph - Baixar Conteudo Transcricao",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2528,
+        416
+      ],
+      "credentials": {
+        "microsoftGraphSecurityOAuth2Api": {
+          "id": "Br2RyUhQxAiGqJim",
+          "name": "Microsoft Graph Security n8n"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const bases = $('Preparar Download Transcricao').all().filter(item => item.json.transcricao_encontrada);\nconst downloads = $input.all();\nfunction sanitizeName(value) {\n  return String(value || '').normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').replace(/[\\\\/:*?\"<>|#%&{}$!@+=`~]/g, ' ').replace(/\\s+/g, ' ').trim().slice(0, 120);\n}\nfunction extrairTexto(item) {\n  const json = item.json;\n  if (typeof json === 'string') return json;\n  if (json?.data !== undefined) return String(json.data || '');\n  if (json?.body !== undefined) return String(json.body || '');\n  if (json?.content !== undefined) return String(json.content || '');\n  if (json?.text !== undefined) return String(json.text || '');\n  return JSON.stringify(json, null, 2);\n}\nfunction limparVtt(vtt) {\n  return String(vtt || '')\n    .replace(/^WEBVTT.*$/gmi, '')\n    .replace(/^\\s*Kind:.*$/gmi, '')\n    .replace(/^\\s*Language:.*$/gmi, '')\n    .replace(/^\\d+\\s*$/gm, '')\n    .replace(/^\\d{2}:\\d{2}:\\d{2}\\.\\d{3}\\s+-->\\s+\\d{2}:\\d{2}:\\d{2}\\.\\d{3}.*$/gm, '')\n    .replace(/^\\d{2}:\\d{2}\\.\\d{3}\\s+-->\\s+\\d{2}:\\d{2}\\.\\d{3}.*$/gm, '')\n    .replace(/<v\\s+([^>]+)>/g, '\\n$1: ')\n    .replace(/<\\/v>/g, '')\n    .replace(/<[^>]+>/g, '')\n    .replace(/\\n{3,}/g, '\\n\\n')\n    .trim();\n}\nfunction extrairParticipantes(texto) {\n  const encontrados = new Map();\n  for (const linha of String(texto || '').split(/\\r?\\n/)) {\n    const match = linha.trim().match(/^([A-ZÁÀÂÃÉÈÊÍÓÔÕÚÇ][A-Za-zÀ-ÿ.' -]{1,80}):\\s+/);\n    if (match) {\n      const nome = match[1].trim();\n      const chave = nome.normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase();\n      if (!encontrados.has(chave)) encontrados.set(chave, nome);\n    }\n  }\n  return Array.from(encontrados.values());\n}\nreturn downloads.map((download, index) => {\n  const base = bases[index]?.json || {};\n  const vttOriginal = extrairTexto(download);\n  const transcricaoLimpa = limparVtt(vttOriginal);\n  const participantes = extrairParticipantes(transcricaoLimpa);\n  const meetingDate = base.meeting_date || String(base.calendar_event_start?.dateTime || '').slice(0, 10) || new Date().toISOString().slice(0, 10);\n  const meetingTitle = sanitizeName(base.meeting_title || base.calendar_event_subject || 'Reuniao sem titulo');\n  const participantesTexto = participantes.length ? participantes.join(', ') : 'Não informado';\n  const finalFileName = `${meetingDate} - Ata da Reuniao - ${meetingTitle}.md`;\n  const prompt = `Você receberá a transcrição de uma reunião do Microsoft Teams.\n\nGere exclusivamente um JSON válido, sem texto antes ou depois, no formato:\n{\n  \"resumo_geral\": \"...\",\n  \"resumo_por_orador\": \"...\",\n  \"markdown_final_reuniao\": \"...\"\n}\n\nREGRAS:\n1. Use somente a transcrição e os metadados fornecidos.\n2. Não invente decisões, responsáveis, prazos, participantes ou tarefas.\n3. Se algo não estiver claro, escreva \"Não informado\".\n4. Preserve português do Brasil.\n5. O resumo por orador só deve listar pessoas com falas identificadas.\n6. Retorne apenas JSON válido.\n\nDADOS DA REUNIÃO:\nTítulo: ${base.meeting_title || meetingTitle}\nData: ${meetingDate}\nHorário: ${base.meeting_time || ''}\nOrganizador: ${base.organizer_name || ''} <${base.organizer_email || ''}>\nParticipantes identificados na transcrição: ${participantesTexto}\n\nESTRUTURA DO resumo_geral:\n# Resumo Geral\n\n## Visão geral\nParágrafo executivo com o objetivo aparente da reunião.\n\n## Principais pontos\n- **Ponto:** descrição objetiva.\n\n## Decisões identificadas\n- Liste somente decisões claras. Se não houver, escreva \"Não informado\".\n\n## Encaminhamentos\n- Liste próximos passos claros. Se não houver, escreva \"Não informado\".\n\nESTRUTURA DO resumo_por_orador:\n# Resumo por Orador\n\nPara cada pessoa com fala identificada:\n#### **Nome**\n- Principais contribuições.\n- Dúvidas ou pontos levantados.\n- Decisões conduzidas, se houver.\n- Pendências assumidas, se houver.\n\nESTRUTURA DO markdown_final_reuniao:\n---\ndata: ${meetingDate}\nparticipantes:\n${participantes.length ? participantes.map(p => `  - ${p}`).join('\\n') : '  - Não informado'}\nprojeto: ${base.meeting_title || meetingTitle}\ntags: reuniao, teams, transcricao\narea: \"[[Reuniões]]\"\n---\n\n# Overview\n\nParágrafo executivo explicando objetivo, principais assuntos, decisões relevantes e próximos encaminhamentos.\n\n# Resumo\n\n- **Título do ponto discutido**: explicação objetiva.\n\n# Anotações da reunião\n\n- **Nome do tema:** explicação geral.\n    - Detalhe relevante.\n    - Decisão tomada, se houver.\n    - Encaminhamento ou ponto de atenção, se houver.\n\n# Falas por Participante\n\n### **Nome do Participante ou Orador**\n\n- Principais contribuições da pessoa.\n\nTRANSCRIÇÃO:\n${transcricaoLimpa}`;\n  return { json: { ...base, meeting_title: meetingTitle, meeting_title_sanitized: meetingTitle, meeting_date: meetingDate, participantes_lista: participantes, participantes_origem: participantes.length ? 'inferidos_da_transcricao' : 'nao_identificados', transcricao_original_vtt: vttOriginal, transcricao: transcricaoLimpa, transcricao_tamanho_caracteres: transcricaoLimpa.length, possui_indicio_de_falantes: participantes.length > 0, total_participantes_identificados: participantes.length, arquivo_final_md: finalFileName, arquivo_resumo_ia: '01 - Resumo Geral.md', arquivo_resumo_orador: '02 - Resumo por Orador.md', arquivo_transcricao: '03 - Transcricao.md', arquivo_metadados: `metadados-reuniao-${meetingDate}.json`, prompt }};\n});"
+      },
+      "id": "f8ccb0bb-7b71-42f7-bb44-1ddebbbc23da",
+      "name": "Preparar Prompt Resumos e Ata",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2352,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{$json.prompt}}",
+        "options": {
+          "systemMessage": "=Você é um agente especializado em transformar transcrições do Microsoft Teams em resumos executivos, resumo por orador e ata Markdown. Retorne exclusivamente JSON válido, sem texto antes ou depois. Não invente informações. Use apenas os dados fornecidos. Preserve português do Brasil."
+        }
+      },
+      "id": "fac5c32e-4ae2-4aa6-a14f-6459bd768cfa",
+      "name": "AI Agent - Gerar Resumos e Ata",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        -4304,
+        1072
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "model": "gpt-4.1",
+        "options": {}
+      },
+      "id": "caf9aaea-8570-4e0f-8c08-9919461574b9",
+      "name": "Azure OpenAI Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAzureOpenAi",
+      "typeVersion": 1,
+      "position": [
+        -4320,
+        1280
+      ],
+      "credentials": {
+        "azureOpenAiApi": {
+          "id": "lzmfx1ZZt0Z6D4kb",
+          "name": "Azure Open AI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const bases = $('Preparar Prompt Resumos e Ata').all();\nconst inputs = $input.all();\nfunction limparCercas(texto) { return String(texto || '').trim().replace(/^```json\\s*/i, '').replace(/^```markdown\\s*/i, '').replace(/^```\\s*/i, '').replace(/```$/i, '').trim(); }\nfunction extrairTextoAI(aiJson) { return aiJson.output || aiJson.text || aiJson.response || aiJson.result || aiJson.data || ''; }\nfunction tentarParseJson(raw) {\n  const texto = limparCercas(raw);\n  try { return JSON.parse(texto); } catch (e) {\n    const inicio = texto.indexOf('{'); const fim = texto.lastIndexOf('}');\n    if (inicio >= 0 && fim > inicio) return JSON.parse(texto.slice(inicio, fim + 1));\n    throw new Error(`AI Agent não retornou JSON válido: ${e.message}. Conteúdo: ${texto.slice(0, 1500)}`);\n  }\n}\nfunction toBase64(value) { return Buffer.from(String(value || ''), 'utf8').toString('base64'); }\nreturn inputs.map((item, index) => {\n  const base = bases[index]?.json || {};\n  const parsed = tentarParseJson(extrairTextoAI(item.json || {}));\n  const resumoGeral = limparCercas(parsed.resumo_geral || '');\n  const resumoPorOrador = limparCercas(parsed.resumo_por_orador || '');\n  const markdownAta = limparCercas(parsed.markdown_final_reuniao || '');\n  if (!markdownAta) throw new Error('markdown_final_reuniao veio vazio no retorno da IA.');\n  const meetingDate = base.meeting_date || new Date().toISOString().slice(0, 10);\n  const title = base.meeting_title_sanitized || base.meeting_title || 'Reuniao';\n  const arquivoFinalMd = base.arquivo_final_md || `${meetingDate} - Ata da Reuniao - ${title}.md`;\n  const metadados = {\n    origem: 'Microsoft Teams Graph Transcript',\n    generated_at: new Date().toISOString(),\n    graph_user_principal_name: base.graph_user_principal_name,\n    calendar_event_id: base.calendar_event_id,\n    calendar_event_subject: base.calendar_event_subject,\n    calendar_event_web_link: base.calendar_event_web_link,\n    online_meeting_id: base.online_meeting_id,\n    transcript_id: base.transcript_id,\n    meeting_title: base.meeting_title,\n    meeting_date: base.meeting_date,\n    meeting_time: base.meeting_time,\n    organizer_name: base.organizer_name,\n    organizer_email: base.organizer_email,\n    attendees: base.attendees || [],\n    participantes_lista: base.participantes_lista || [],\n    participantes_origem: base.participantes_origem || 'nao_informado',\n    possui_indicio_de_falantes: base.possui_indicio_de_falantes,\n    total_participantes_identificados: base.total_participantes_identificados\n  };\n  return { json: { ...base, ai_output_original: item.json || {}, ai_output_parseado: parsed, resumo_ia_completo: resumoGeral, resumo_por_orador: resumoPorOrador, markdown_final: markdownAta, markdown_final_reuniao: markdownAta, metadados_json: metadados, arquivo_final_md: arquivoFinalMd, validacao_basica: { reuniao_possui_yaml: markdownAta.startsWith('---'), reuniao_possui_overview: markdownAta.includes('# Overview'), reuniao_possui_resumo: markdownAta.includes('# Resumo'), reuniao_possui_anotacoes: markdownAta.includes('# Anotações da reunião'), reuniao_possui_falas_por_participante: markdownAta.includes('# Falas por Participante') } },\n    binary: {\n      arquivo_final_md: { data: toBase64(markdownAta), mimeType: 'text/markdown', fileName: arquivoFinalMd, fileExtension: 'md' },\n      resumo_ia_completo_md: { data: toBase64(resumoGeral), mimeType: 'text/markdown', fileName: base.arquivo_resumo_ia || '01 - Resumo Geral.md', fileExtension: 'md' },\n      resumo_por_orador_md: { data: toBase64(resumoPorOrador), mimeType: 'text/markdown', fileName: base.arquivo_resumo_orador || '02 - Resumo por Orador.md', fileExtension: 'md' },\n      transcricao_md: { data: toBase64(base.transcricao || ''), mimeType: 'text/markdown', fileName: base.arquivo_transcricao || '03 - Transcricao.md', fileExtension: 'md' },\n      metadados_json: { data: toBase64(JSON.stringify(metadados, null, 2)), mimeType: 'application/json', fileName: base.arquivo_metadados || `metadados-reuniao-${meetingDate}.json`, fileExtension: 'json' }\n    }};\n});"
+      },
+      "id": "10944e95-62dc-4276-ba7f-54c8315d741a",
+      "name": "Extrair Resultado IA e Criar Binarios",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3984,
+        1072
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nfunction validarMarkdown(markdown) {\n  const texto = String(markdown || '');\n\n  const possuiYaml =\n    texto.trim().startsWith('---') &&\n    texto.indexOf('---', 3) > 0;\n\n  const possuiOverview =\n    /(^|\\n)#\\s+Overview\\b/i.test(texto);\n\n  const possuiResumo =\n    /(^|\\n)#\\s+Resumo\\b/i.test(texto);\n\n  const possuiAnotacoes =\n    /(^|\\n)#\\s+Anotações da reunião\\b/i.test(texto) ||\n    /(^|\\n)#\\s+Anotacoes da reuniao\\b/i.test(texto);\n\n  const possuiFalas =\n    /(^|\\n)#\\s+Falas por Participante\\b/i.test(texto);\n\n  const problemas = [];\n\n  if (!possuiYaml) problemas.push('Markdown da ata não possui YAML inicial.');\n  if (!possuiOverview) problemas.push('Markdown da ata não possui seção # Overview.');\n  if (!possuiResumo) problemas.push('Markdown da ata não possui seção # Resumo.');\n  if (!possuiAnotacoes) problemas.push('Markdown da ata não possui seção # Anotações da reunião.');\n  if (!possuiFalas) problemas.push('Markdown da ata não possui seção # Falas por Participante.');\n\n  return {\n    reuniao_possui_yaml: possuiYaml,\n    reuniao_possui_overview: possuiOverview,\n    reuniao_possui_resumo: possuiResumo,\n    reuniao_possui_anotacoes: possuiAnotacoes,\n    reuniao_possui_falas_por_participante: possuiFalas,\n    problemas_validacao: problemas,\n    markdown_valido_para_importacao: problemas.length === 0,\n    reuniao_valida_para_importacao: problemas.length === 0\n  };\n}\n\nreturn items.map(item => {\n  const json = item.json || {};\n  const binary = item.binary || {};\n\n  const markdownAta =\n    json.markdown_final_reuniao ||\n    json.markdown_final ||\n    '';\n\n  const validacao = validarMarkdown(markdownAta);\n\n  return {\n    json: {\n      ...json,\n\n      ...validacao,\n\n      validacao_basica: {\n        ...(json.validacao_basica || {}),\n        reuniao_possui_yaml: validacao.reuniao_possui_yaml,\n        reuniao_possui_overview: validacao.reuniao_possui_overview,\n        reuniao_possui_resumo: validacao.reuniao_possui_resumo,\n        reuniao_possui_anotacoes: validacao.reuniao_possui_anotacoes,\n        reuniao_possui_falas_por_participante: validacao.reuniao_possui_falas_por_participante\n      }\n    },\n    binary\n  };\n});"
+      },
+      "id": "43f3ec29-7eec-4465-b5cb-368a63b9f99c",
+      "name": "Validar Ata Markdown",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3728,
+        1088
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nfunction encPath(path) {\n  return String(path || '')\n    .split('/')\n    .filter(Boolean)\n    .map(part => encodeURIComponent(part))\n    .join('/');\n}\n\nfunction sanitizeName(value) {\n  return String(value || '')\n    .normalize('NFD')\n    .replace(/[\\u0300-\\u036f]/g, '')\n    .replace(/[\\\\/:*?\"<>|#%&{}$!@+=`~]/g, ' ')\n    .replace(/\\s+/g, ' ')\n    .trim()\n    .slice(0, 120);\n}\n\nconst graphBase = 'https://graph.microsoft.com/v1.0/me/drive';\nconst baseFolder = 'Reuniões';\n\nreturn items.map((item, index) => {\n  const json = item.json || {};\n  const binary = item.binary || {};\n\n  const meetingDate =\n    json.meeting_date ||\n    json.online_meeting_start?.slice?.(0, 10) ||\n    json.calendar_event_start?.dateTime?.slice?.(0, 10) ||\n    new Date().toISOString().slice(0, 10);\n\n  const meetingTitle =\n    sanitizeName(\n      json.meeting_title_sanitized ||\n      json.meeting_title ||\n      json.online_meeting_subject ||\n      json.calendar_event_subject ||\n      `Reuniao sem titulo ${index + 1}`\n    );\n\n  const pastaReuniaoNome =\n    `${meetingDate} - ${meetingTitle}`;\n\n  const pastaReuniaoPath =\n    `${baseFolder}/${pastaReuniaoNome}`;\n\n  return {\n    json: {\n      ...json,\n\n      destino_tipo: 'onedrive_reunioes',\n      destino_graph_base: graphBase,\n\n      destino_base_folder: baseFolder,\n      destino_reuniao_folder_name: pastaReuniaoNome,\n      destino_reuniao_folder_path: pastaReuniaoPath,\n\n      graph_criar_pasta_reuniao_url:\n        `${graphBase}/root:/${encPath(baseFolder)}:/children`,\n\n      body_criar_pasta_reuniao: {\n        name: pastaReuniaoNome,\n        folder: {},\n        '@microsoft.graph.conflictBehavior': 'replace'\n      },\n\n      indice_destino_onedrive: index + 1,\n      pronto_para_criar_pasta_onedrive: true\n    },\n    binary\n  };\n});"
+      },
+      "id": "b50ac74c-7ad2-4cdf-bd46-9819b891b891",
+      "name": "Configurar Destino OneDrive Reunioes",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3408,
+        1088
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$json.graph_criar_pasta_reuniao_url}}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftGraphSecurityOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{$json.body_criar_pasta_reuniao}}",
+        "options": {}
+      },
+      "id": "5976d44a-dcee-4ab7-9f69-107d22de1554",
+      "name": "Graph - Criar Pasta Reuniao OneDrive",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -3712,
+        1344
+      ],
+      "credentials": {
+        "microsoftGraphSecurityOAuth2Api": {
+          "id": "Br2RyUhQxAiGqJim",
+          "name": "Microsoft Graph Security n8n"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const pastasCriadas = $input.all();\nconst originais = $('Configurar Destino OneDrive Reunioes').all();\n\nconst graphBase = 'https://graph.microsoft.com/v1.0/me/drive';\n\nfunction encPath(path) {\n  return String(path || '')\n    .split('/')\n    .filter(Boolean)\n    .map(part => encodeURIComponent(part))\n    .join('/');\n}\n\nfunction sanitizeName(value) {\n  return String(value || '')\n    .normalize('NFD')\n    .replace(/[\\u0300-\\u036f]/g, '')\n    .replace(/[\\\\/:*?\"<>|#%&{}$!@+=`~]/g, ' ')\n    .replace(/\\s+/g, ' ')\n    .trim()\n    .slice(0, 120);\n}\n\nreturn pastasCriadas.map((item, index) => {\n  const pastaCriada = item.json || {};\n  const originalItem = originais[index];\n\n  if (!originalItem) {\n    throw new Error(`Não encontrei o item original no índice ${index}.`);\n  }\n\n  const original = originalItem.json || {};\n  const binary = originalItem.binary || {};\n\n  const meetingDate =\n    original.meeting_date ||\n    original.online_meeting_start?.slice?.(0, 10) ||\n    original.calendar_event_start?.dateTime?.slice?.(0, 10) ||\n    new Date().toISOString().slice(0, 10);\n\n  const meetingTitle =\n    sanitizeName(\n      original.meeting_title_sanitized ||\n      original.meeting_title ||\n      original.online_meeting_subject ||\n      original.calendar_event_subject ||\n      `Reuniao sem titulo ${index + 1}`\n    );\n\n  const pastaReuniaoNome =\n    original.destino_reuniao_folder_name ||\n    `${meetingDate} - ${meetingTitle}`;\n\n  const pastaReuniaoPath =\n    original.destino_reuniao_folder_path ||\n    `Reuniões/${pastaReuniaoNome}`;\n\n  const arquivoAta =\n    original.arquivo_final_md ||\n    `${meetingDate} - Ata da Reuniao - ${meetingTitle}.md`;\n\n  const arquivoResumoGeral =\n    original.arquivo_resumo_ia ||\n    '01 - Resumo Geral.md';\n\n  const arquivoResumoOrador =\n    original.arquivo_resumo_orador ||\n    '02 - Resumo por Orador.md';\n\n  const arquivoTranscricao =\n    original.arquivo_transcricao ||\n    '03 - Transcricao.md';\n\n  const arquivoMetadados =\n    original.arquivo_metadados ||\n    `metadados-reuniao-${meetingDate}.json`;\n\n  return {\n    json: {\n      ...original,\n\n      pasta_criada_onedrive_original: pastaCriada,\n\n      destino_reuniao_folder_id: pastaCriada.id || '',\n      destino_reuniao_web_url: pastaCriada.webUrl || original.destino_reuniao_web_url || '',\n\n      graph_upload_ata_url:\n        `${graphBase}/root:/${encPath(pastaReuniaoPath)}/${encodeURIComponent(arquivoAta)}:/content`,\n\n      graph_upload_resumo_geral_url:\n        `${graphBase}/root:/${encPath(pastaReuniaoPath)}/${encodeURIComponent(arquivoResumoGeral)}:/content`,\n\n      graph_upload_resumo_orador_url:\n        `${graphBase}/root:/${encPath(pastaReuniaoPath)}/${encodeURIComponent(arquivoResumoOrador)}:/content`,\n\n      graph_upload_transcricao_url:\n        `${graphBase}/root:/${encPath(pastaReuniaoPath)}/${encodeURIComponent(arquivoTranscricao)}:/content`,\n\n      graph_upload_metadados_url:\n        `${graphBase}/root:/${encPath(pastaReuniaoPath)}/${encodeURIComponent(arquivoMetadados)}:/content`,\n\n      pronto_para_upload_onedrive: true,\n      modo_upload: 'raw_text_sem_binario'\n    },\n    binary\n  };\n});"
+      },
+      "id": "c5a2aaf3-1c5e-4aed-865b-bbd58398191e",
+      "name": "Preparar URLs Upload OneDrive Reuniao",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3408,
+        1344
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{$json.graph_upload_ata_url}}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftGraphSecurityOAuth2Api",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "text/markdown",
+        "body": "={{$json.markdown_final_reuniao || $json.markdown_final || ''}}",
+        "options": {}
+      },
+      "id": "ed753eaa-806e-4f00-9aeb-c0a7fab2be08",
+      "name": "Upload - Ata OneDrive",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -3120,
+        1024
+      ],
+      "credentials": {
+        "microsoftGraphSecurityOAuth2Api": {
+          "id": "Br2RyUhQxAiGqJim",
+          "name": "Microsoft Graph Security n8n"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{$json.graph_upload_resumo_geral_url}}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftGraphSecurityOAuth2Api",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "text/markdown",
+        "body": "={{$json.resumo_ia_completo || $json.resumo_geral || ''}}",
+        "options": {}
+      },
+      "id": "a1477f36-c86d-4536-a768-e47c5d3ee11c",
+      "name": "Upload - Resumo Geral OneDrive",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -2928,
+        1104
+      ],
+      "credentials": {
+        "microsoftGraphSecurityOAuth2Api": {
+          "id": "Br2RyUhQxAiGqJim",
+          "name": "Microsoft Graph Security n8n"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{$json.graph_upload_resumo_orador_url}}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftGraphSecurityOAuth2Api",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "text/markdown",
+        "body": "={{$json.resumo_por_orador || $json.resumo_oradores || ''}}",
+        "options": {}
+      },
+      "id": "242e1b11-552f-4851-a59d-535426452acb",
+      "name": "Upload - Resumo por Orador OneDrive",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -3040,
+        1264
+      ],
+      "credentials": {
+        "microsoftGraphSecurityOAuth2Api": {
+          "id": "Br2RyUhQxAiGqJim",
+          "name": "Microsoft Graph Security n8n"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{$json.graph_upload_transcricao_url}}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftGraphSecurityOAuth2Api",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "text/markdown",
+        "body": "={{$json.transcricao || $json.transcricao_original_vtt || $json.transcricao_markdown || ''}}",
+        "options": {}
+      },
+      "id": "2403b399-e935-4910-b327-132a14a023f7",
+      "name": "Upload - Transcricao OneDrive",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -2880,
+        1344
+      ],
+      "credentials": {
+        "microsoftGraphSecurityOAuth2Api": {
+          "id": "Br2RyUhQxAiGqJim",
+          "name": "Microsoft Graph Security n8n"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{$json.graph_upload_metadados_url}}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftGraphSecurityOAuth2Api",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{typeof $json.metadados_json === 'string' ? $json.metadados_json : JSON.stringify($json.metadados_json || $json, null, 2)}}",
+        "options": {}
+      },
+      "id": "9cf274ab-646f-4ce7-a074-cb5c452dd79d",
+      "name": "Upload - Metadados OneDrive",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -3024,
+        1504
+      ],
+      "credentials": {
+        "microsoftGraphSecurityOAuth2Api": {
+          "id": "Br2RyUhQxAiGqJim",
+          "name": "Microsoft Graph Security n8n"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{$json.graph_baixar_controle_processados_url}}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftGraphSecurityOAuth2Api",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -2560,
+        80
+      ],
+      "id": "cfe6fa1a-89ac-41b3-a165-e2e8431ff927",
+      "name": "Graph - Baixar Controle Processados",
+      "credentials": {
+        "microsoftGraphSecurityOAuth2Api": {
+          "id": "Br2RyUhQxAiGqJim",
+          "name": "Microsoft Graph Security n8n"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const controles = $input.all();\nconst originais = $('Preparar Download Transcricao')\n  .all()\n  .filter(item => item.json.transcricao_encontrada);\n\nfunction extrairTextoControle(item) {\n  const json = item.json;\n\n  if (typeof json === 'string') return json;\n  if (json?.data !== undefined) return String(json.data || '');\n  if (json?.body !== undefined) return String(json.body || '');\n  if (json?.content !== undefined) return String(json.content || '');\n  if (json?.text !== undefined) return String(json.text || '');\n\n  return '';\n}\n\nreturn controles\n  .map((controleItem, index) => {\n    const originalItem = originais[index];\n\n    if (!originalItem) {\n      return null;\n    }\n\n    const original = originalItem.json || {};\n    const textoControle = extrairTextoControle(controleItem);\n\n    const chave = original.chave_processamento || '';\n\n    const jaProcessado =\n      chave &&\n      textoControle\n        .split(/\\r?\\n/)\n        .some(linha => linha.startsWith(`${chave}|`));\n\n    if (jaProcessado) {\n      return null;\n    }\n\n    return {\n      json: {\n        ...original,\n        ja_processado: false,\n        status_controle_processamento: 'reuniao_nova_para_processar',\n        controle_processados_txt_atual: textoControle\n      }\n    };\n  })\n  .filter(Boolean);"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2288,
+        80
+      ],
+      "id": "6a69255b-47e0-4493-a05f-cda6ab67beee",
+      "name": "Filtrar Reunioes Ja Processadas"
+    },
+    {
+      "parameters": {
+        "jsCode": "const originais = $('Preparar URLs Upload OneDrive Reuniao').all();\nconst controles = $('Graph - Baixar Controle Processados').all();\n\nfunction extrairTextoControle(item) {\n  const json = item?.json;\n\n  if (typeof json === 'string') return json;\n  if (json?.data !== undefined) return String(json.data || '');\n  if (json?.body !== undefined) return String(json.body || '');\n  if (json?.content !== undefined) return String(json.content || '');\n  if (json?.text !== undefined) return String(json.text || '');\n\n  return '';\n}\n\nlet controleAtual = '';\n\nfor (const item of controles) {\n  const texto = extrairTextoControle(item);\n  if (texto) {\n    controleAtual = texto;\n    break;\n  }\n}\n\nconst linhasExistentes = controleAtual\n  .split(/\\r?\\n/)\n  .map(l => l.trim())\n  .filter(Boolean);\n\nconst chavesExistentes = new Set(\n  linhasExistentes.map(linha => linha.split('|')[0])\n);\n\nconst novasLinhas = [];\n\nfor (const item of originais) {\n  const json = item.json || {};\n\n  const chave = json.chave_processamento || '';\n\n  if (!chave || chavesExistentes.has(chave)) {\n    continue;\n  }\n\n  const linha = [\n    chave,\n    json.meeting_date || '',\n    String(json.meeting_title || '').replace(/\\|/g, '-'),\n    String(json.destino_reuniao_folder_path || '').replace(/\\|/g, '-'),\n    new Date().toISOString()\n  ].join('|');\n\n  novasLinhas.push(linha);\n  chavesExistentes.add(chave);\n}\n\nconst controleProcessadosAtualizado = [\n  ...linhasExistentes,\n  ...novasLinhas\n].join('\\n') + '\\n';\n\nreturn [\n  {\n    json: {\n      graph_upload_controle_processados_url:\n        'https://graph.microsoft.com/v1.0/me/drive/root:/Reuni%C3%B5es/_controle/processados.txt:/content',\n\n      controle_processados_txt: controleProcessadosAtualizado,\n      total_reunioes_registradas_agora: novasLinhas.length,\n      total_linhas_controle: linhasExistentes.length + novasLinhas.length,\n      controle_atualizado_em: new Date().toISOString()\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2496,
+        1200
+      ],
+      "id": "f6541057-bc8b-4a16-92a0-9ac4eb1b1967",
+      "name": "Preparar Atualizacao Controle Processados"
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{$json.graph_upload_controle_processados_url}}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftGraphSecurityOAuth2Api",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "text/plain",
+        "body": "={{$json.controle_processados_txt}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -2208,
+        1200
+      ],
+      "id": "eb42b647-e1cd-4a35-acad-080f902aa024",
+      "name": "Upload - Controle Processados",
+      "credentials": {
+        "microsoftGraphSecurityOAuth2Api": {
+          "id": "Br2RyUhQxAiGqJim",
+          "name": "Microsoft Graph Security n8n"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 4
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -4288,
+        64
+      ],
+      "id": "ceb7eb9b-be66-41eb-b4a4-a6518d3dd880",
+      "name": "Schedule - Verificar Reunioes a cada 4h"
+    },
+    {
+      "parameters": {
+        "content": "## Etapa 1  - Verificar se as credencias e o usuario estão com permissão para ver as reuniões\nCom base nas credenciais verificamos se a mesma esta com as permissões devidas",
+        "height": 816,
+        "width": 832
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -4368,
+        -80
+      ],
+      "id": "4c42688d-b5c4-4445-8901-0f510f997cd7",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "content": "## Etapa 2  - Verificar a existencia de reunião pelo conta credenciada\nCom base no usuário ele pesquisa as reuniões que estão sendo organizadas pela conta ou que esteja participando",
+        "height": 816,
+        "width": 832,
+        "color": 3
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -3488,
+        -80
+      ],
+      "id": "9061cf25-5f52-468d-a6cd-dc277e6b0dd8",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "content": "## Etapa 3  - Baixar conteúdo da reunião para concatenar os dados e repassar a IA\nLevanta os dados da reunião , concatena as informações para entrega a IA",
+        "height": 816,
+        "width": 544,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -2608,
+        -80
+      ],
+      "id": "10f51b2e-e3c4-41c4-95e5-d6c3d97bb303",
+      "name": "Sticky Note2"
+    },
+    {
+      "parameters": {
+        "content": "## Etapa 4  - Processamento da IA com os dados buscados e faz os resumos necessários \nDocumentos gerados  :  resumo geral / resumo por orador / ata",
+        "height": 752,
+        "width": 544,
+        "color": 5
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -4368,
+        896
+      ],
+      "id": "639ec717-1c13-4305-ae66-88d8544e120c",
+      "name": "Sticky Note3"
+    },
+    {
+      "parameters": {
+        "content": "## Etapa 5  - Validação dos markdown gerados e direcionamento da gravação dos arquivos na pasta da reunião \nDocumentos gerados  :  resumo geral / resumo por orador / ata",
+        "height": 752,
+        "width": 544,
+        "color": "#4AE109"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -3776,
+        896
+      ],
+      "id": "3b1fbb6b-2259-4942-970b-20dc85f1f033",
+      "name": "Sticky Note4"
+    },
+    {
+      "parameters": {
+        "content": "## Etapa 6  - Upload dos arquivos gerados nas pastas de cada reunião \nDocumentos gerados  :  resumo geral / resumo por orador / ata",
+        "height": 752,
+        "width": 544,
+        "color": "#E7CA08"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -3184,
+        896
+      ],
+      "id": "bf920d10-4ad6-4461-a87a-c7b07b94b82f",
+      "name": "Sticky Note5"
+    },
+    {
+      "parameters": {
+        "content": "## Etapa 7  - Log de auditoria das reuniões processadas\nDentro de um arquivo txt , é registrado a partir de uma chave unica cos dados da reunião que a mesma ja foi processada para que não haja duplicidade na montagem da ata",
+        "height": 752,
+        "width": 544,
+        "color": "#CD0EA4"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -2576,
+        896
+      ],
+      "id": "4880552f-e8ae-474f-bc7b-264eb564e2a8",
+      "name": "Sticky Note6"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.graph_buscar_online_meeting_url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftGraphSecurityOAuth2Api",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -1120,
+        816
+      ],
+      "id": "719617da-7a78-407e-b3df-8f1e7b549b0f",
+      "name": "HTTP Request",
+      "credentials": {
+        "microsoftGraphSecurityOAuth2Api": {
+          "id": "Br2RyUhQxAiGqJim",
+          "name": "Microsoft Graph Security n8n"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const joinWebUrl = `https://teams.microsoft.com/meet/252241957299176?p=hNhn72FOZJqhpJPf9D`;\n\nfunction escapeODataString(value) {\n  return String(value || '').replace(/'/g, \"''\");\n}\n\nfunction encodeQuery(params) {\n  return Object.entries(params)\n    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)\n    .join('&');\n}\n\nconst usuario = 'christian_7c@cnc.org.br';\n\nconst filter = `JoinWebUrl eq '${escapeODataString(joinWebUrl)}'`;\n\nconst query = encodeQuery({\n  '$filter': filter\n});\n\nreturn [\n  {\n    json: {\n      usuario_monitorado: usuario,\n      join_web_url: joinWebUrl,\n      graph_buscar_online_meeting_url:\n        `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(usuario)}/onlineMeetings?${query}`\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1312,
+        816
+      ],
+      "id": "8e41df5e-8254-47b1-98f6-86fd8e10d754",
+      "name": "Code in JavaScript",
+      "disabled": true
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manual Trigger - Teste Reunioes Teams": {
+      "main": [
+        []
+      ]
+    },
+    "Configurar Busca Calendario": {
+      "main": [
+        [
+          {
+            "node": "Graph - Quem Sou Eu",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Graph - Quem Sou Eu": {
+      "main": [
+        [
+          {
+            "node": "Preparar Listagem Calendario",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Listagem Calendario": {
+      "main": [
+        [
+          {
+            "node": "Graph - Listar Eventos Calendario",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Graph - Listar Eventos Calendario": {
+      "main": [
+        [
+          {
+            "node": "Filtrar Reunioes Teams Finalizadas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filtrar Reunioes Teams Finalizadas": {
+      "main": [
+        [
+          {
+            "node": "IF - Achou Reuniao Teams",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Achou Reuniao Teams": {
+      "main": [
+        [
+          {
+            "node": "Preparar Busca Online Meeting",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Sem Reunioes Para Processar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Busca Online Meeting": {
+      "main": [
+        [
+          {
+            "node": "Graph - Buscar Online Meeting",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Graph - Buscar Online Meeting": {
+      "main": [
+        [
+          {
+            "node": "Extrair Online Meeting",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extrair Online Meeting": {
+      "main": [
+        [
+          {
+            "node": "IF - Achou Online Meeting",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Achou Online Meeting": {
+      "main": [
+        [
+          {
+            "node": "Graph - Listar Transcricoes da Reuniao",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Graph - Listar Transcricoes da Reuniao": {
+      "main": [
+        [
+          {
+            "node": "Preparar Download Transcricao",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Download Transcricao": {
+      "main": [
+        [
+          {
+            "node": "IF - Achou Transcricao",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Achou Transcricao": {
+      "main": [
+        [
+          {
+            "node": "Graph - Baixar Controle Processados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Graph - Baixar Conteudo Transcricao": {
+      "main": [
+        [
+          {
+            "node": "Preparar Prompt Resumos e Ata",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Prompt Resumos e Ata": {
+      "main": [
+        [
+          {
+            "node": "AI Agent - Gerar Resumos e Ata",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Azure OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent - Gerar Resumos e Ata",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent - Gerar Resumos e Ata": {
+      "main": [
+        [
+          {
+            "node": "Extrair Resultado IA e Criar Binarios",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extrair Resultado IA e Criar Binarios": {
+      "main": [
+        [
+          {
+            "node": "Validar Ata Markdown",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar Ata Markdown": {
+      "main": [
+        [
+          {
+            "node": "Configurar Destino OneDrive Reunioes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Configurar Destino OneDrive Reunioes": {
+      "main": [
+        [
+          {
+            "node": "Graph - Criar Pasta Reuniao OneDrive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Graph - Criar Pasta Reuniao OneDrive": {
+      "main": [
+        [
+          {
+            "node": "Preparar URLs Upload OneDrive Reuniao",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar URLs Upload OneDrive Reuniao": {
+      "main": [
+        [
+          {
+            "node": "Upload - Ata OneDrive",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Upload - Resumo Geral OneDrive",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Upload - Resumo por Orador OneDrive",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Upload - Transcricao OneDrive",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Upload - Metadados OneDrive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload - Ata OneDrive": {
+      "main": [
+        [
+          {
+            "node": "Preparar Atualizacao Controle Processados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload - Resumo Geral OneDrive": {
+      "main": [
+        [
+          {
+            "node": "Preparar Atualizacao Controle Processados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload - Resumo por Orador OneDrive": {
+      "main": [
+        [
+          {
+            "node": "Preparar Atualizacao Controle Processados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload - Transcricao OneDrive": {
+      "main": [
+        [
+          {
+            "node": "Preparar Atualizacao Controle Processados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload - Metadados OneDrive": {
+      "main": [
+        [
+          {
+            "node": "Preparar Atualizacao Controle Processados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Graph - Baixar Controle Processados": {
+      "main": [
+        [
+          {
+            "node": "Filtrar Reunioes Ja Processadas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filtrar Reunioes Ja Processadas": {
+      "main": [
+        [
+          {
+            "node": "Graph - Baixar Conteudo Transcricao",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Atualizacao Controle Processados": {
+      "main": [
+        [
+          {
+            "node": "Upload - Controle Processados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload - Controle Processados": {
+      "main": [
+        []
+      ]
+    },
+    "Schedule - Verificar Reunioes a cada 4h": {
+      "main": [
+        [
+          {
+            "node": "Configurar Busca Calendario",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        []
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "a6a481f9-8e01-44ee-be9a-c46eb5a0c9ad",
+  "meta": {
+    "instanceId": "e5478122757d89b315d518c8206626e2099d868fcb445d41e465c9c5ec6fa61d"
+  },
+  "id": "mSarTp1m4WrcaQqn",
+  "tags": []
+}
